@@ -42,15 +42,15 @@ def get_wear_label(itemfloat_num):
         return "战痕累累"
 
 def get_thread_count(num_tasks):
-    if num_tasks > 5000:
+    if num_tasks > 10000:
         return 10
-    elif num_tasks > 1000:
+    elif num_tasks > 5000:
         return 5
-    elif num_tasks > 500:
+    elif num_tasks > 1000:
         return 2
     else:
         return 1
-
+# 计算磨损矩阵
 def convert_wear_to_price_fast(wear_matrix, skin_id, secret_df):
     wear_matrix = np.array(wear_matrix)
     n, m, k = wear_matrix.shape
@@ -85,7 +85,7 @@ def convert_wear_to_price_fast(wear_matrix, skin_id, secret_df):
             result[:, j, l] = prices
     return result
 
-
+#期望矩阵计算
 def calc_expected_profit(price_matrix, Weight_ls):
     n, m, k = price_matrix.shape
 
@@ -99,17 +99,19 @@ def calc_expected_profit(price_matrix, Weight_ls):
     expected_profit = np.sum(weighted_price, axis=1, keepdims=True)
 
     return expected_profit
+# 计算总成本矩阵
 def calc_total_cost(price_per_unit, number_ls):
     price_per_unit = np.array(price_per_unit).reshape(1, -1)  # shape (1, 3)
     total_cost = np.sum(number_ls * price_per_unit, axis=1, keepdims=True)  # shape (n, 1)
     return total_cost
+# 计算收益率矩阵
 def calc_yield_rate(expected_profit, total_cost):
     # 避免除以 0
     with np.errstate(divide='ignore', invalid='ignore'):
         yield_rate = np.true_divide(expected_profit, total_cost)
         yield_rate[~np.isfinite(yield_rate)] = 0  # 将 inf 和 nan 转为 0
     return yield_rate
-
+# 绘制收益率分布图
 def plot_yield_distribution(yield_rates, threshold, save_path):
     plt.figure(figsize=(10, 6))
     sns.histplot(yield_rates, kde=True, bins=30, color='skyblue')
@@ -123,7 +125,7 @@ def plot_yield_distribution(yield_rates, threshold, save_path):
     plt.savefig(img_path)
     plt.close()
     print(f"📈 收益率分布图已保存到：{img_path}")
-
+# 计算组合索引
 def find_combo_index(idx, index_ranges):
     for i, (start, end) in enumerate(index_ranges):
         if start <= idx < end:
@@ -131,7 +133,7 @@ def find_combo_index(idx, index_ranges):
                 return 0
             return i//len(all_combinations_num)
     raise IndexError(f"Index {idx} 不在任何组合范围内！")
-
+# 保存结果到Excel
 def save_results_to_excel(
     all_combination,
     skin_id_map_list,
@@ -194,7 +196,17 @@ def save_results_to_excel(
                 row.append(round(expected_profit[idx], 2))
                 row.append(round(total_cost[idx], 2))
                 row.append(round(yield_rate[idx], 4))
-                row.extend(list(Weight_ls[idx]))
+                found = False
+                for box_index in range(n):
+                    if sid in skin_id_map_list[j][box_index]:
+                        box_weight = Weight_ls[idx][box_index]
+                        box_skin_count = len(skin_id_map_list[j][box_index])
+                        skin_prob = box_weight / box_skin_count if box_skin_count else 0
+                        found = True
+                        break
+                if not found:
+                    skin_prob = 0
+                row.append(round(skin_prob, 6))
                 row.extend(list(number_ls[idx]))
                 row.extend([label, round(wear, 6)])
                 for i in range(n):
@@ -229,12 +241,17 @@ def save_results_to_excel(
     all_columns = (
         [f"组合箱子{i+1}" for i in range(n)] +
         ["产物皮肤名称", "产物售价", "期望收益", "组合成本", "组合收益率"] +
-        [f"皮肤概率{i+1}" for i in range(n)] +
+        ["皮肤概率"] +
         [f"组合{i+1}_数量" for i in range(n)] +
         ["磨损区间", "磨损值"] +
-        [f"炉渣{i+1}_皮肤名称" for i in range(n)] +
-        [f"炉渣{i+1}_平均磨损" for i in range(n)] +
-        [f"炉渣{i+1}_均价" for i in range(n)]
+        [
+            label
+            for i in range(n)
+            for label in [
+            f"炉渣{i + 1}_皮肤名称",
+            f"炉渣{i + 1}_平均磨损",
+            f"炉渣{i + 1}_均价"]
+        ]
     )
 
 
@@ -284,15 +301,7 @@ def generate_partitions(n, k):
 
 ##################################### 主循环：多线程版本 ##########################################################################
 
-def get_thread_count(num_tasks):
-    if num_tasks > 20000:
-        return 10
-    elif num_tasks > 10000:
-        return 5
-    elif num_tasks > 5000:
-        return 2
-    else:
-        return 1
+
 
 def process_single_combination(i, n, Superior, secret, Confidentiality,
                                lookup_itemfloat_avedge, lookup_quality, all_combinations_num):
@@ -410,7 +419,7 @@ if __name__ == "__main__":
 
     # 多线程执行
     thread_count = get_thread_count(len(all_combination))
-    print(f"🧵 正在使用 {thread_count} 个线程处理 {len(all_combination)} 个组合...")
+    print(f"🧵 正在使用 {thread_count} 个进程处理 {len(all_combination)} 个组合...")
 
 
     func = partial(
@@ -475,7 +484,7 @@ if __name__ == "__main__":
         itemfloat_avedge_dict=lookup_itemfloat_avedge,  # 炉渣 id → 磨损 dict
         quality_dict=lookup_quality,  # 炉渣 id → price dict
         box_names = lookup_box,
-        save_folder=r"C:\Users\86150\Desktop\cs饰品\mksd",  # 保存目录
+        save_folder=folder,  # 保存目录
         save_name=f"analysis_results_{today}.xlsx",  # 保存文件名
         n=n,  # 箱子数量
         plot_distribution=True  # 是否画收益率分布图
