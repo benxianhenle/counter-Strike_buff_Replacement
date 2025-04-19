@@ -1,4 +1,4 @@
-```markdown
+
 # CSGO饰品汰换模拟分析工具 使用文档
 
 ## 项目概述
@@ -60,13 +60,13 @@ python 多元模拟.py --input 数据.xlsx --output 分析结果/ --n 3 --thresh
 - 品质优先级映射：违禁(1) > 隐秘(2) > ... > 消费级(7)
 - 武器箱ID编码：自动生成唯一标识
 - 数据合并策略：
-  - 高品质皮肤：保留最低价条目
-  - 低品质皮肤：按武器箱分组去重
+  - 低品质皮肤：保留最低价条目
+  - 搞品质皮肤：按武器箱分组去重
 
 ### 多元模拟引擎
 - 磨损计算模型：
   ```python
-  wear = (max_wear - min_wear) * 权重平均值 + min_wear
+  wear = (max_wear - min_wear) * 炉渣磨损平均值*权重 + min_wear
   ```
 - 多线程加速：支持10线程并行处理
 - 智能过滤：收益率阈值(threshold)动态过滤低效组合
@@ -97,4 +97,3 @@ threshold = 0.8     # 收益率过滤阈值
 3. 首次运行前执行`pip install -r requirements.txt`
 
 
-```
