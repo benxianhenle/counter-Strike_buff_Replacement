@@ -13,8 +13,9 @@ import seaborn as sns
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor
-
-
+import traceback
+import ast
+import time
 ######################################## 函数运算 ########################################################################
 # 用来计算磨损
 def get_wear_values_by_skin_name(max_itemfloa, min_itemfloa,itemfloat_avedge,Weight_ls):
@@ -29,28 +30,18 @@ def get_wear_values_by_skin_name(max_itemfloa, min_itemfloa,itemfloat_avedge,Wei
     wear_values = delta * offset_weights + min_itemfloa
     return wear_values  # shape: (n, m, k）
 
-def get_wear_label(itemfloat_num):
-    if itemfloat_num < 0.07:
-        return "崭新出厂"
-    elif itemfloat_num < 0.15:
-        return "略有磨损"
-    elif itemfloat_num < 0.38:
-        return "久经沙场"
-    elif itemfloat_num < 0.45:
-        return "破损不堪"
-    else:
-        return "战痕累累"
+
 
 def get_thread_count(num_tasks):
-    if num_tasks > 5000:
+    if num_tasks > 100000:
+        return 20
+    elif num_tasks > 10000:
         return 10
-    elif num_tasks > 1000:
+    elif num_tasks > 5000:
         return 5
-    elif num_tasks > 500:
-        return 2
     else:
         return 1
-
+# 计算磨损矩阵
 def convert_wear_to_price_fast(wear_matrix, skin_id, secret_df):
     wear_matrix = np.array(wear_matrix)
     n, m, k = wear_matrix.shape
@@ -86,6 +77,8 @@ def convert_wear_to_price_fast(wear_matrix, skin_id, secret_df):
     return result
 
 
+
+#期望矩阵计算
 def calc_expected_profit(price_matrix, Weight_ls):
     n, m, k = price_matrix.shape
 
@@ -99,10 +92,12 @@ def calc_expected_profit(price_matrix, Weight_ls):
     expected_profit = np.sum(weighted_price, axis=1, keepdims=True)
 
     return expected_profit
+# 计算总成本矩阵
 def calc_total_cost(price_per_unit, number_ls):
     price_per_unit = np.array(price_per_unit).reshape(1, -1)  # shape (1, 3)
     total_cost = np.sum(number_ls * price_per_unit, axis=1, keepdims=True)  # shape (n, 1)
     return total_cost
+# 计算收益率矩阵
 def calc_yield_rate(expected_profit, total_cost):
     # 避免除以 0
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -110,20 +105,7 @@ def calc_yield_rate(expected_profit, total_cost):
         yield_rate[~np.isfinite(yield_rate)] = 0  # 将 inf 和 nan 转为 0
     return yield_rate
 
-def plot_yield_distribution(yield_rates, threshold, save_path):
-    plt.figure(figsize=(10, 6))
-    sns.histplot(yield_rates, kde=True, bins=30, color='skyblue')
-    plt.axvline(threshold, color='red', linestyle='--', label=f'阈值: {threshold}')
-    plt.title("收益率分布图")
-    plt.xlabel("收益率")
-    plt.ylabel("频数")
-    plt.legend()
-    plt.tight_layout()
-    img_path = os.path.join(save_path, "收益率分布图.png")
-    plt.savefig(img_path)
-    plt.close()
-    print(f"📈 收益率分布图已保存到：{img_path}")
-
+# 计算组合索引
 def find_combo_index(idx, index_ranges):
     for i, (start, end) in enumerate(index_ranges):
         if start <= idx < end:
@@ -131,6 +113,103 @@ def find_combo_index(idx, index_ranges):
                 return 0
             return i//len(all_combinations_num)
     raise IndexError(f"Index {idx} 不在任何组合范围内！")
+
+def get_wear_label(itemfloat_num):
+    if itemfloat_num < 0.07:
+        return "崭新出厂"
+    elif itemfloat_num < 0.15:
+        return "略有磨损"
+    elif itemfloat_num < 0.38:
+        return "久经沙场"
+    elif itemfloat_num < 0.45:
+        return "破损不堪"
+    else:
+        return "战痕累累"
+
+def chunk_list(lst, size):
+    for i in range(0, len(lst), size):
+        yield lst[i:i + size]
+
+def process_single_index(
+    idx,
+    combo_sample_index_ranges,
+    all_combination,
+    skin_id_map_list,
+    new_skin_itemfloat,
+    converted_matrix,
+    expected_profit,
+    total_cost,
+    yield_rate,
+    number_ls,
+    Weight_ls,
+    skin_id_lz,
+    n,
+    box_names,
+    skin_name_map,
+    lz_skin_name_map,
+    itemfloat_avedge_dict,
+    quality_dict
+):
+    try:
+        j = -1
+        for i, (start, end) in enumerate(combo_sample_index_ranges):
+            if start <= idx < end:
+                j = i
+                break
+        if j == -1 or j >= len(skin_id_map_list):
+            return []
+
+        rows = []
+        box_skin_sets = [set(skin_id_map_list[j][i]) for i in range(n)]
+
+        for j2 in range(len(skin_id_map_list[j])):
+            for k in range(len(skin_id_map_list[j][j2])):
+                sid = skin_id_map_list[j][j2][k]
+                if sid == 0:
+                    continue
+                wear = new_skin_itemfloat[idx, j2, k]
+                price = converted_matrix[idx, j2, k]
+                label = get_wear_label(wear)
+                row = []
+                original_comb = all_combination[j]
+                converted_comb = [box_names.get(box_id, f"ID_{box_id}") for box_id in original_comb]
+                row.extend(converted_comb)
+                row.append(skin_name_map.get(sid, f"ID_{sid}"))
+                row.append(round(price, 2))
+                row.append(round(expected_profit[idx], 2))
+                row.append(round(total_cost[idx], 2))
+                row.append(round(yield_rate[idx], 4))
+                found = False
+                for box_index in range(n):
+                    if sid in box_skin_sets[box_index]:
+                        box_weight = Weight_ls[idx][box_index]
+                        box_skin_count = len(box_skin_sets[box_index])
+                        skin_prob = box_weight / box_skin_count if box_skin_count else 0
+                        found = True
+                        break
+                if not found:
+                    skin_prob = 0
+                row.append(round(skin_prob, 6))
+                row.extend(list(number_ls[idx]))
+                row.extend([label, round(wear, 6)])
+                for i in range(n):
+                    lz_id = skin_id_lz[j][i]
+                    lz_name = lz_skin_name_map.get(lz_id, f"ID_{lz_id}")
+                    lz_wear = itemfloat_avedge_dict.get(lz_id, 0)
+                    lz_price = quality_dict.get(lz_id, 0)
+                    row.extend([lz_name, round(lz_wear, 6), round(lz_price, 2)])
+                rows.append(row)
+        return rows
+    except Exception as e:
+        logging.error(f"❌ 构造 index {idx} 出错: {e}\n{traceback.format_exc()}")
+        return []
+
+def process_batch_indices(idx_batch, **kwargs):
+    all_rows = []
+    for idx in idx_batch:
+        rows = process_single_index(idx, **kwargs)
+        all_rows.extend(rows)
+    return all_rows
 
 def save_results_to_excel(
     all_combination,
@@ -153,8 +232,7 @@ def save_results_to_excel(
     save_folder: str,
     save_name: str,
     n: int,
-    plot_distribution=True,
-    use_multithreading=True
+    plot_distribution=True
 ):
     os.makedirs(save_folder, exist_ok=True)
     save_path = os.path.join(save_folder, save_name.replace('.xlsx', '.csv'))
@@ -166,87 +244,91 @@ def save_results_to_excel(
         combo_sample_index_ranges.append((start, start + count))
         start += count
 
+    max_index = start
+    filtered_idx = np.where((yield_rate > threshold) & (np.arange(len(yield_rate)) < max_index))[0]
+
     skin_name_map = Superior.set_index('skin_name_id')['skin_name'].to_dict()
     lz_skin_name_map = Confidentiality.set_index('skin_name_id')['skin_name'].to_dict()
-
-    filtered_idx = np.where(yield_rate > threshold)[0]
-    data_rows = []
-
-    def process_single_index(idx):
-        j = find_combo_index(idx, combo_sample_index_ranges)
-        # 直接通过整除计算原始组合索引 j
-        rows = []
-        for j2 in range(len(skin_id_map_list[j])):
-            for k in range(len(skin_id_map_list[j][j2])):
-                sid = skin_id_map_list[j][j2][k]
-                if sid == 0:
-                    continue
-                wear = new_skin_itemfloat[idx, j2, k]
-                price = converted_matrix[idx, j2, k]
-                label = get_wear_label(wear)
-                row = []
-                # 将组合中的每个箱子ID转换为名称
-                original_comb = all_combination[j]
-                converted_comb = [lookup_box.get(box_id, f"ID_{box_id}") for box_id in original_comb]
-                row.extend(converted_comb)
-                row.append(skin_name_map.get(sid, f"ID_{sid}"))
-                row.append(round(price, 2))
-                row.append(round(expected_profit[idx], 2))
-                row.append(round(total_cost[idx], 2))
-                row.append(round(yield_rate[idx], 4))
-                row.extend(list(Weight_ls[idx]))
-                row.extend(list(number_ls[idx]))
-                row.extend([label, round(wear, 6)])
-                for i in range(n):
-                    lz_id = skin_id_lz[j][i]
-                    lz_name = lz_skin_name_map.get(lz_id, f"ID_{lz_id}")
-                    lz_wear = itemfloat_avedge_dict.get(lz_id, 0)
-                    lz_price = quality_dict.get(lz_id, 0)
-                    row.extend([lz_name, round(lz_wear, 6), round(lz_price, 2)])
-                rows.append(row)
-        return rows
-
-    if use_multithreading:
-        thread_count = get_thread_count(len(filtered_idx))
-        print(f"🧵 构造结果行：使用 {thread_count} 个线程处理 {len(filtered_idx)} 条数据")
-
-        with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            all_results = list(tqdm(
-                executor.map(process_single_index, filtered_idx),
-                total=len(filtered_idx),
-                desc="多线程构造结果行"
-            ))
-        for r in all_results:
-            data_rows.extend(r)
-    else:
-        for idx in tqdm(filtered_idx, desc="构造结果行"):
-            data_rows.extend(process_single_index(idx))
-
-    if not data_rows:
-        print("⚠️ 没有满足条件的组合，未保存文件。")
-        return
 
     all_columns = (
         [f"组合箱子{i+1}" for i in range(n)] +
         ["产物皮肤名称", "产物售价", "期望收益", "组合成本", "组合收益率"] +
-        [f"皮肤概率{i+1}" for i in range(n)] +
+        ["皮肤概率"] +
         [f"组合{i+1}_数量" for i in range(n)] +
         ["磨损区间", "磨损值"] +
-        [f"炉渣{i+1}_皮肤名称" for i in range(n)] +
-        [f"炉渣{i+1}_平均磨损" for i in range(n)] +
-        [f"炉渣{i+1}_均价" for i in range(n)]
+        [
+            label
+            for i in range(n)
+            for label in [
+                f"炉渣{i + 1}_皮肤名称",
+                f"炉渣{i + 1}_平均磨损",
+                f"炉渣{i + 1}_均价"]
+        ]
     )
 
+    batch_size = 10000
+    mini_batch_size = 500  # 提高每个进程处理量
+    write_every = 5
+    buffer_rows = []
 
+    batches = list(chunk_list(filtered_idx, batch_size))
+    for bi, batch in enumerate(tqdm(batches, desc="🚀 分批构造结果行")):
 
-    df = pd.DataFrame(data_rows, columns=all_columns)
-    df.to_csv(save_path, index=False, encoding='utf-8-sig')
-    print(f"✅ 成功保存为 CSV 至：{save_path}")
+        print(f"🧵 第 {bi+1}/{len(batches)} 批次：使用多进程处理 {len(batch)} 条数据")
+        mini_batches = list(chunk_list(batch, mini_batch_size))
 
+        kwargs = dict(
+            combo_sample_index_ranges=combo_sample_index_ranges,
+            all_combination=all_combination,
+            skin_id_map_list=skin_id_map_list,
+            new_skin_itemfloat=new_skin_itemfloat,
+            converted_matrix=converted_matrix,
+            expected_profit=expected_profit,
+            total_cost=total_cost,
+            yield_rate=yield_rate,
+            number_ls=number_ls,
+            Weight_ls=Weight_ls,
+            skin_id_lz=skin_id_lz,
+            n=n,
+            box_names=box_names,
+            skin_name_map=skin_name_map,
+            lz_skin_name_map=lz_skin_name_map,
+            itemfloat_avedge_dict=itemfloat_avedge_dict,
+            quality_dict=quality_dict
+        )
+
+        func = partial(process_batch_indices, **kwargs)
+
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            all_results = list(tqdm(executor.map(func, mini_batches), total=len(mini_batches), desc="子任务处理中"))
+
+        flat_rows = [row for sublist in all_results for row in sublist]
+        buffer_rows.extend(flat_rows)
+
+        # 每 N 批写入一次
+        if (bi + 1) % write_every == 0 or (bi + 1) == len(batches):
+            if buffer_rows:
+                df = pd.DataFrame(buffer_rows, columns=all_columns)
+                df.to_csv(save_path, index=False, mode='a', encoding='utf-8-sig', header=not os.path.exists(save_path))
+                print(f"📄 写入 {len(buffer_rows)} 行数据")
+                buffer_rows.clear()
+
+    print(f"✅ 所有结果已保存为 CSV 至：{save_path}")
     if plot_distribution:
-        plot_yield_distribution(yield_rate, threshold, save_folder)
-
-
+        from matplotlib import pyplot as plt
+        import seaborn as sns
+        plt.figure(figsize=(10, 6))
+        sns.histplot(yield_rate, kde=True, bins=30, color='skyblue')
+        plt.axvline(threshold, color='red', linestyle='--', label=f'threshold: {threshold}')
+        plt.title("Yield Distribution Chart")
+        plt.xlabel("Yield")
+        plt.ylabel("Frequency")
+        plt.legend()
+        plt.tight_layout()
+        img_path = os.path.join(save_folder, f"收益率分布图{today}_{input_ls[0]}_{n}.png")
+        plt.savefig(img_path)
+        plt.close()
+        print(f"📈 收益率分布图已保存到：{img_path}")
 
 def pad_to_shape(tensor_list, target_k):
     """
@@ -267,32 +349,33 @@ def pad_to_shape(tensor_list, target_k):
 
 
 def generate_partitions(n, k):
+    """
+    生成所有长度为 n 的非负整数分区，使得：
+    - 所有值 ≥1（即每个盒子至少被开一次）
+    - 所有值之和为 k（默认 10）
+    - 返回的分区已排序去重
+    """
     results = []
-    def backtrack(start, path):
-        if len(path) == n - 1:
-            last = k - sum(path)
-            if last >= 0:
-                results.append(tuple(sorted(path + [last])))
+
+    def backtrack(path, remaining):
+        if len(path) == n:
+            if remaining == 0:
+                results.append(tuple(sorted(path)))
             return
-        for i in range(k + 1):
-            if sum(path) + i <= k:
-                backtrack(start + 1, path + [i])
-    backtrack(0, [])
+        # 至少留出 (n - len(path) - 1) 个 1 给后面的
+        for i in range(1, remaining - (n - len(path) - 1) + 1):
+            backtrack(path + [i], remaining - i)
+
+    if k >= n:
+        backtrack([], k)
     return sorted(set(results))
+
 
 
 
 ##################################### 主循环：多线程版本 ##########################################################################
 
-def get_thread_count(num_tasks):
-    if num_tasks > 20000:
-        return 10
-    elif num_tasks > 10000:
-        return 5
-    elif num_tasks > 5000:
-        return 2
-    else:
-        return 1
+
 
 def process_single_combination(i, n, Superior, secret, Confidentiality,
                                lookup_itemfloat_avedge, lookup_quality, all_combinations_num):
@@ -355,6 +438,8 @@ if __name__ == "__main__":
                         format='%(asctime)s - %(levelname)s - %(message)s')
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=str, required=True)
+    parser.add_argument("--input1", type=str, required=True)
+    parser.add_argument("--input_ls", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument('--n', type=int, default=3, help='箱子数量')
     parser.add_argument('--threshold', type=float, default=0.8, help='保存阈值')
@@ -366,14 +451,25 @@ if __name__ == "__main__":
 
     # 读取文件
     box_fill = parser.parse_args().input
+    file_old = parser.parse_args().input1
+    input_ls = ast.literal_eval(parser.parse_args().input_ls)
     folder = parser.parse_args().output
-    itemfloat_fill_path = "data/饰品磨损区间.xlsx"
+    if input_ls[4] == 0:
+        itemfloat_fill_path = "data/饰品磨损区间.xlsx"
+    if input_ls[4] == 1:
+        itemfloat_fill_path = "data/饰品磨损区间StatTrak.xlsx"
+
     skin_file = "data/cs饰品编号/对应编号.xlsx"
     # 存储路径
     today = datetime.now().strftime("%Y-%m-%d")
-
+    if input_ls[4]==1:
+        StatTrak_if = "StatTrak™"
+    else:
+        StatTrak_if = "普通"
+    #再folder路径下创建一名为 today的文件夹
+    folder = os.path.join(folder, f"{today}_{StatTrak_if}")
     os.makedirs(folder, exist_ok=True)
-    save_path = os.path.join(folder, f"analysis_results_{today}.xlsx")
+    save_path = os.path.join(folder, f"analysis_results_{today}_{input_ls[0]}_{input_ls[4]}.xlsx")
 ############################### 数据预处理 ###############################################################################
     # 导入磨损数据
     itemfloat_fill = pd.read_excel(itemfloat_fill_path)
@@ -381,10 +477,7 @@ if __name__ == "__main__":
     box_fill = 价格处理.main(box_fill, skin_file)
 
     # 预处理将数据分为三个部分 Superior是高品质皮肤不包含多个磨损区间，secret是高品质皮肤包含多个磨损，Confidentiality是只保留每个武器箱价格最低的低品质皮肤
-    (Superior, secret, Confidentiality) = 模拟前预处理.clean_box(box_fill, itemfloat_fill)
-    print(Superior.head())
-    print(secret.head())
-    print(Confidentiality.head())
+    (Superior, secret, Confidentiality) = 模拟前预处理.clean_box(box_fill, itemfloat_fill,file_old,input_ls)
     # 从Confidentiality中获取所有的箱子名称
     box_names = Confidentiality['weapon_box_id'].unique()
     # 获取所有箱子的组合并转化为列表
@@ -410,8 +503,7 @@ if __name__ == "__main__":
 
     # 多线程执行
     thread_count = get_thread_count(len(all_combination))
-    print(f"🧵 正在使用 {thread_count} 个线程处理 {len(all_combination)} 个组合...")
-
+    print(f"🧵 正在使用 {thread_count} 个进程处理 {len(all_combination)} 个组合...")
 
     func = partial(
         process_single_combination,
@@ -475,8 +567,8 @@ if __name__ == "__main__":
         itemfloat_avedge_dict=lookup_itemfloat_avedge,  # 炉渣 id → 磨损 dict
         quality_dict=lookup_quality,  # 炉渣 id → price dict
         box_names = lookup_box,
-        save_folder=r"C:\Users\86150\Desktop\cs饰品\mksd",  # 保存目录
-        save_name=f"analysis_results_{today}.xlsx",  # 保存文件名
+        save_folder=folder,  # 保存目录
+        save_name=f"analysis_results_{today}_{input_ls[0]}_{n}.xlsx",  # 保存文件名
         n=n,  # 箱子数量
         plot_distribution=True  # 是否画收益率分布图
     )

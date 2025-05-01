@@ -1,0 +1,9 @@
+pandas
+numpy
+requests
+tqdm
+openpyxl
+xlsxwriter
+matplotlib
+seaborn
+math

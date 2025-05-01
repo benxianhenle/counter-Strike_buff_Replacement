@@ -12,14 +12,17 @@ def main(file_path,skin_lst):
         '消费级': 7,
     }
 
-    def get_numbers_from_excel(file_path, text_1, text_2, quality,ls):
+    def get_numbers_from_excel(file_path, text_1, text_2, quality,ls,StatTrak):
         # 读取所有工作表
         all_sheets = pd.read_excel(file_path, sheet_name=None)
         selected_sheets = list(all_sheets.items())[ls[0]:ls[1]]
 
         numbers = []
-
-        wear_levels = ["崭新出厂", "略有磨损", "久经沙场", "破损不堪", "战痕累累"]
+        if StatTrak:
+            wear_levels = ["StatTrak™崭新出厂", "StatTrak™略有磨损", "StatTrak™久经沙场", "StatTrak™破损不堪", "StatTrak™战痕累累"]
+            quality = "StatTrak™" + quality
+        else:
+            wear_levels = ["崭新出厂", "略有磨损", "久经沙场", "破损不堪", "战痕累累"]
 
         for sheet_name, df in selected_sheets:
             filtered1 = df[df['品质'] == text_1]
@@ -48,7 +51,7 @@ def main(file_path,skin_lst):
 
     # 使用示例
 
-    result = get_numbers_from_excel(file_path, skin_lst[0], skin_lst[1], skin_lst[2],skin_lst[3])
+    result = get_numbers_from_excel(file_path, skin_lst[0], skin_lst[1], skin_lst[2],skin_lst[3],skin_lst[4])
 
     # 生成JSON并保存
     with open("csgoItemsInfoFixed1.json", 'w', encoding='utf-8') as f:

@@ -62,7 +62,7 @@ def buffcrawl_hi(fell_json,output):
         if i in goods_id:
             continue
         # 随机间隔（1-3秒）
-        time.sleep(random.uniform(1, 1.5))
+        time.sleep(random.uniform(0.5, 1.2))
 
         all_id_url = orignal_url + str(goods_read[i])
         print(f"Processing: {goods_read[i]}")

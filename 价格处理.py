@@ -2,9 +2,12 @@ import pandas as pd
 
 # 读取数据
 
-def main(file_path,skin_file):
+def main(file_path,skin_file="data/cs饰品编号/对应编号.xlsx"):
     # 读取物品价格数据
-    df_items = pd.read_excel(file_path)
+    if isinstance(file_path, pd.DataFrame):
+        df_items = file_path.copy()
+    else:
+        df_items = pd.read_excel(file_path)
     # 提取所需列
     df_items = df_items[['goods_id', 'price', 'itemfloat']]
 
